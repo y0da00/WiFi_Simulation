@@ -1,1 +1,4 @@
 *.zip
+.import/
+.mono/
+Swiss_Buildings_Data/
