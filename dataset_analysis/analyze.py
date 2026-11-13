@@ -151,7 +151,7 @@ if __name__ == "__main__":
     building_ids = list(buildings)
     print(len(building_ids), "buildings")
 
-    os.makedirs("../godot_sim", exist_ok=True)
+    
     i = 0
     while i < len(building_ids):                                    
         building_id = building_ids[i]
@@ -172,7 +172,7 @@ if __name__ == "__main__":
             rows = rows_b[rows_b.apartment_id == apt["id"]]
             b["apartments"].append(build_apartment(apt["id"], rows, openings, stairs_by_floor, floor_below))
 
-        with open("../godot_sim/draw.json", "w") as f:
+        with open("../godot_sim_updated/godot-sim-4/draw.json", "w") as f:
             json.dump(b, f)
         print(f"building {i + 1}/{len(building_ids)} (id {building_id}): {len(apartments)} apartments written")
 
