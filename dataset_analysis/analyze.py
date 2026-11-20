@@ -131,17 +131,17 @@ def build_apartment(apt_id, rows, openings, stairs_by_floor, floor_below):
 
 
 if __name__ == "__main__":
-    if os.path.exists("../Swiss_Buildings_Data/data.parquet"):
-        dataset = pd.read_parquet("../Swiss_Buildings_Data/data.parquet")
-    else:
-        dataset = pd.read_csv("../Swiss_Buildings_Data/geometries.csv.zip")
-        dataset.to_parquet("../Swiss_Buildings_Data/data.parquet")
+    path = "../Swiss_Buildings_Data/data.parquet"
+    if not os.path.exists(path):
+        pd.read_csv("../Swiss_Buildings_Data/geometries.csv.zip").to_parquet(path)
 
-    
+    # Read only the columns and rows we use, straight from the file. Filtering after loading
+    # (dataset.loc[...]) holds the whole dataset plus a filtered copy in memory at once.
     cols = ["apartment_id", "building_id", "floor_id", "entity_type", "entity_subtype",
             "geometry", "elevation", "height"]
-    data = dataset.loc[dataset.entity_type.isin(["area", "separator", "opening"]) | dataset.entity_subtype.isin(FEATURES), cols].reset_index(drop=True)
-    del dataset
+    keep = [[("entity_type", "in", ["area", "separator", "opening"])],   # this condition,
+            [("entity_subtype", "in", sorted(FEATURES))]]                # OR this one
+    data = pd.read_parquet(path, columns=cols, filters=keep).reset_index(drop=True)
     data = data.fillna({"elevation": 0, "height": 0, "apartment_id": "public"})
 
   
