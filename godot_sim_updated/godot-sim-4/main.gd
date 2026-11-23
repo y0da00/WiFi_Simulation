@@ -1,34 +1,15 @@
 extends Node3D
-# Single-player box editor: the building from draw.json, and boxes you can add, drag,
-# turn, move between floors and nudge, which never go into walls, floors or ceilings.
-# One file, no networking. Attach it to a Node3D as the root of the main scene.
-#
-# Units: 1 Godot unit = 1 metre. The draw.json export (and the Swiss dataset it comes
-# from) is in metres, so box sizes typed here are real sizes. The scale line at the top
-# of the screen shows the building's measured floor and door heights to confirm it.
-#
-# Controls
-#   Add box, then click        place a new box on the top floor (Esc cancels)
-#   Click a box, drag          move it; it stops at walls and slides along them
-#   W / S                      move the selected box one floor up / down
-#   Shift+W / Shift+S          move it 1 cm up / down
-#   Hold R / Shift+R           turn the selected box (or the box being placed)
-#   Delete                     remove the selected box
-#   Left-drag on empty space   orbit the camera around the point in the middle of the screen
-#   Right-drag                 pan: the floor under the mouse follows it
-#   Wheel                      zoom toward the point under the mouse
-#   Arrow keys, Q / E          move the camera (Q / E: the y_up / y_down actions)
-#   C / F                      show or hide ceilings / floors
 
 const BUILDING_FILE = "res://draw.json"
-const FINE_STEP = 0.01               # metres per Shift+W / Shift+S press
-const TURN_SPEED = 45.0              # degrees per second while R is held
-const ORBIT_SPEED = 0.3              # degrees per pixel of mouse movement
-const ZOOM_FACTOR = 0.85             # each wheel step multiplies the camera distance by this
-const ZOOM_MIN = 1.5                 # closest and farthest camera distance in metres
+const PORT = 9080
+const FINE_STEP = 0.01              
+const TURN_SPEED = 45.0              
+const ORBIT_SPEED = 0.3             
+const ZOOM_FACTOR = 0.85             
+const ZOOM_MIN = 1.5                 
 const ZOOM_MAX = 300.0
-const PITCH_MIN = -89.0              # straight down
-const PITCH_MAX = -5.0               # almost level: the camera never dips below the point it looks at
+const PITCH_MIN = -89.0             
+const PITCH_MAX = -5.0               
 
 const COLORS = {
 	"walls": Color(0.9, 0.9, 0.9), "railings": Color(0.3, 0.3, 0.3),
@@ -36,50 +17,54 @@ const COLORS = {
 	"ceilings": Color(0.8, 0.8, 0.75), "doors": Color(0.45, 0.28, 0.12), "windows": Color(0.2, 0.5, 1.0)}
 const BOX_COLOR = Color(0.2, 0.7, 0.3)
 const BOX_SELECTED = Color(1.0, 0.8, 0.1)
-const GHOST_OK = Color(0.2, 0.8, 0.3, 0.35)  # preview of a new box: fits here
-const GHOST_BAD = Color(0.9, 0.2, 0.2, 0.35) # preview of a new box: does not fit here
+const GHOST_OK = Color(0.2, 0.8, 0.3, 0.35) 
+const GHOST_BAD = Color(0.9, 0.2, 0.2, 0.35) 
 
-# how each kind of building piece stops a box
+
 enum {SOLID, SLAB, DOOR}
-const BLOCKING = {"walls": SOLID, "railings": SOLID, "windows": SOLID, "stairs_elevators": SOLID,
-	"floors": SLAB, "ceilings": SLAB, "doors": DOOR}
+const BLOCKING = {"walls": SOLID, "railings": SOLID, "windows": SOLID, "stairs_elevators": SOLID, "floors": SLAB, "ceilings": SLAB, "doors": DOOR}
 
-# ---- the building ----
-var data = {}                        # draw.json as loaded
-var obstacles = []                   # {type, kind, poly, holes, rect, y0, y1} for every building piece
-var levels = [0.0]                   # height of each floor's surface, lowest first
+#building
+var data = {}                     
+var obstacles = []                   #{type, kind, poly, holes, rect, y0, y1}
+var levels = [0.0]                  
 
-# ---- boxes ----
-var objects = {}                     # box id -> {size: Vector3, pos: Vector3, rot: float (radians, around Y), node, mat}
+#boxes
+var objects = {}                     #{size: Vector3, pos: Vector3, rot: float (radians, around Y), node, mat}
 var next_id = 1
-var selected = 0                     # 0 = no box selected
-var dragging = false                 # the left button is down on the selected box
+var selected = 0                     
+var dragging = false                 
 var grab_offset = Vector3.ZERO
-var placing = false                  # Add box was pressed: the next click places the new box
-var ghost_rot = 0.0                  # rotation of the box being placed
-var last_mouse = Vector2.ZERO        # where the mouse was last seen, to update the preview while turning
+var placing = false                
+var ghost_rot = 0.0                  
+var last_mouse = Vector2.ZERO       
 
-# ---- camera: it hangs on `pivot` and always looks at it ----
-var pivot = Node3D.new()             # the point in the middle of the screen
+#camera
+var pivot = Node3D.new()             
 var cam = Camera3D.new()
-var orbiting = false                 # the left button is down on empty space
-var panning = false                  # the right button is down
+var orbiting = false                 
+var panning = false                 
 
-# ---- scene ----
+#scene
 var building = Node3D.new()
 var ceilings = Node3D.new()
 var floors = Node3D.new()
 var boxes = Node3D.new()
-var ghost = MeshInstance3D.new()     # see-through preview of a new box
+var ghost = MeshInstance3D.new()     
 var ghost_mat = StandardMaterial3D.new()
 
-# ---- interface ----
+#interface
+var address = LineEdit.new()
+var status = Label.new()
 var scale_label = Label.new()
 var info = Label.new()
-var size_boxes = []                  # the three SpinBoxes: width (x), height (y), depth (z)
+var size_boxes = []                 
 
 
 func _ready():
+	if DisplayServer.get_name() == "headless":
+		start_server()
+		return
 	add_lights()
 	add_child(building)
 	add_child(boxes)
@@ -91,6 +76,9 @@ func _ready():
 	add_child(pivot)
 	pivot.add_child(cam)
 	make_ui()
+	multiplayer.connected_to_server.connect(func(): status.text = "Connected as player %d" % multiplayer.get_unique_id())
+	multiplayer.connection_failed.connect(func(): status.text = "Could not reach the server")
+	multiplayer.server_disconnected.connect(func(): status.text = "Server disconnected")
 
 	var error = load_building(BUILDING_FILE)
 	if error != "":
@@ -100,6 +88,34 @@ func _ready():
 	scale_label.text = scale_text()
 	place_camera()
 	update_info()
+
+
+func start_server():
+	set_process(false)
+	Engine.max_fps = 60
+	var peer = ENetMultiplayerPeer.new()
+	if peer.create_server(PORT) != OK:
+		print("Could not listen on port %d" % PORT)
+		get_tree().quit(1)
+		return
+	multiplayer.multiplayer_peer = peer
+	multiplayer.peer_connected.connect(func(id): print("Player %d joined, %d connected" % [id, multiplayer.get_peers().size()]))
+	multiplayer.peer_disconnected.connect(func(id): print("Player %d left, %d connected" % [id, multiplayer.get_peers().size()]))
+	print("Server listening on port %d" % PORT)
+
+
+func join():
+	var old = multiplayer.multiplayer_peer
+	if old is ENetMultiplayerPeer and old.get_connection_status() != MultiplayerPeer.CONNECTION_DISCONNECTED:
+		if old.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED:
+			status.text = "Already connected as player %d" % multiplayer.get_unique_id()
+		return
+	var peer = ENetMultiplayerPeer.new()
+	if peer.create_client(address.text.strip_edges(), PORT) != OK:
+		status.text = "Bad address"
+		return
+	multiplayer.multiplayer_peer = peer
+	status.text = "Connecting ..."
 
 
 func add_lights():
@@ -120,15 +136,13 @@ func add_lights():
 	add_child(world_env)
 
 
-# ============================== loading the building ==============================
 
-func load_building(path):                # returns "" or what went wrong
+
+func load_building(path):                # will return an error if something went wrong
 	var f = FileAccess.open(path, FileAccess.READ)
 	if f == null:
 		return "Cannot open %s" % path
 	var parsed = JSON.parse_string(f.get_as_text())
-	if not parsed is Dictionary or not parsed.get("apartments") is Array:
-		return "%s does not contain building data" % path
 	data = parsed
 	for apt in data.apartments:
 		for kind in BLOCKING:
@@ -159,7 +173,7 @@ func add_obstacle(kind, piece):
 		"y0": piece[1], "y1": piece[1] + piece[2]})
 
 
-# floors = the heights of the floor pieces' top surfaces; pieces less than 1.5 m apart are one floor
+
 func find_levels():
 	var heights = []
 	for o in obstacles:
@@ -174,7 +188,7 @@ func find_levels():
 		levels = [0.0]
 
 
-# measured from the data, so you can check the world is in metres
+
 func scale_text():
 	var walls = []
 	var doors = []
@@ -198,7 +212,7 @@ func make_piece(piece):
 	var shape = prism(piece[0], piece[1], piece[2])
 	if piece[3].is_empty():
 		return shape
-	var combiner = CSGCombiner3D.new()          # piece with holes: cut them out
+	var combiner = CSGCombiner3D.new()          # piece with holes, cuts them out
 	combiner.add_child(shape)
 	for hole in piece[3]:
 		var cut = prism(hole, piece[1] - 0.02, piece[2] + 0.04)
@@ -207,11 +221,11 @@ func make_piece(piece):
 	return combiner
 
 
-func prism(points, elevation, height):
+func prism(points, elevation, height): #draws everything
 	var c = CSGPolygon3D.new()
 	c.polygon = plan(points)
 	c.depth = height
-	c.rotation_degrees.x = 90      # extrude upwards; plan y becomes world z
+	c.rotation_degrees.x = 90      
 	c.position.y = elevation
 	return c
 
@@ -230,15 +244,12 @@ func build_building():
 				parent.add_child(node)
 
 
-# ============================== collision rules ==============================
-# Every building piece is a plan polygon plus the height range it fills.
-# A box (centre `pos`, size `size`, turned `rot`) fits when it overlaps none of them.
 
 func box_y(size, level):                 # y of the box centre when it stands on that floor
 	return levels[level] + size.y / 2
 
 
-func level_of(bottom):                   # the floor at or just below height `bottom`
+func level_of(bottom):                   # the floor at or just below height bottom
 	var level = 0
 	for i in levels.size():
 		if levels[i] <= bottom + 0.01:
@@ -246,11 +257,11 @@ func level_of(bottom):                   # the floor at or just below height `bo
 	return level
 
 
-func blocks_height(o, y0, y1):           # does this piece reach into the box's height range?
-	if o.type == DOOR:                   # a doorway only blocks boxes that stick out above it
+func blocks_height(o, y0, y1):           
+	if o.type == DOOR:                   
 		return y1 > o.y1 + 0.02 and y0 < o.y1
-	if o.type == SLAB:                   # a floor or ceiling slab only blocks a box poking up into it;
-		return o.y0 > y0 + 0.3 and o.y0 < y1 - 0.02      # the slab it stands on never blocks it
+	if o.type == SLAB:                   # a floor or ceiling only blocks a box poking up into it
+		return o.y0 > y0 + 0.3 and o.y0 < y1 - 0.02      
 	return y1 - 0.02 > o.y0 and y0 + 0.02 < o.y1
 
 
@@ -263,7 +274,7 @@ func polygon_area(poly):
 
 func overlaps(box_poly, o):
 	var parts = Geometry2D.intersect_polygons(box_poly, o.poly)
-	for hole in o.holes:                 # inside a hole of the piece there is nothing to hit
+	for hole in o.holes:                 # inside a hole of the piece 
 		var left = []
 		for part in parts:
 			left.append_array(Geometry2D.clip_polygons(part, hole))
@@ -274,20 +285,20 @@ func overlaps(box_poly, o):
 	return false
 
 
-# the box's outline seen from above: its four corners, turned by `rot` around its centre
+
 func footprint(size, pos, rot):
 	var half = Vector2(size.x, size.z) / 2 - Vector2(0.01, 0.01)   # may touch a wall
 	var c = Vector2(pos.x, pos.z)
 	var poly = PackedVector2Array()
 	for corner in [Vector2(-half.x, -half.y), Vector2(half.x, -half.y), half, Vector2(-half.x, half.y)]:
-		poly.append(c + corner.rotated(-rot))   # Godot turns +Y anticlockwise seen from above; plan y is world z
+		poly.append(c + corner.rotated(-rot))  
 	return poly
 
 
 func fits(size, pos, rot):
 	var y0 = pos.y - size.y / 2
 	var y1 = pos.y + size.y / 2
-	if y0 < levels[0] - 0.01:            # never below the ground floor
+	if y0 < levels[0] - 0.01:            
 		return false
 	var box_poly = footprint(size, pos, rot)
 	var rect = Rect2(box_poly[0], Vector2.ZERO)
@@ -299,7 +310,6 @@ func fits(size, pos, rot):
 	return true
 
 
-# ============================== boxes ==============================
 
 func add_box(size, pos, rot):
 	var node = MeshInstance3D.new()
@@ -352,7 +362,7 @@ func update_info(message = ""):
 			posmod(roundi(rad_to_deg(o.rot)), 360)]
 
 
-# W / S: the selected box goes to the floor above or below, standing on it
+#moves box along all levels
 func change_floor(dir):
 	var o = objects[selected]
 	var level = level_of(o.pos.y - o.size.y / 2) + dir
@@ -365,7 +375,7 @@ func change_floor(dir):
 		update_info("Box %d does not fit on floor %d at this spot: drag it somewhere else first" % [selected, level + 1])
 
 
-# Shift+W / Shift+S: a 1 cm step; never below the floor it stands on or into anything
+#small 1cm step limited to the current level
 func nudge(dir):
 	var o = objects[selected]
 	var bottom = o.pos.y - o.size.y / 2
@@ -380,7 +390,7 @@ func nudge(dir):
 		update_info("Box %d cannot go %s here: something is in the way" % [selected, "higher" if dir > 0 else "lower"])
 
 
-# R / Shift+R held: turn the box being placed, or the selected box if it still fits
+# box rotation (TODO: rot in both directions)
 func turn(delta):
 	var step = deg_to_rad(TURN_SPEED) * delta * (-1.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0)
 	if placing:
@@ -397,16 +407,15 @@ func turn(delta):
 			update_info("Box %d cannot turn further here: it would hit something" % selected)
 
 
-# ============================== mouse ==============================
 
-func box_under_mouse(mouse):             # nearest box under the mouse, 0 if none
+#box selection with mouse
+func box_under_mouse(mouse):            
 	var from = cam.project_ray_origin(mouse)
 	var dir = cam.project_ray_normal(mouse)
 	var best = 0
 	var best_dist = INF
 	for id in objects:
 		var o = objects[id]
-		# turn the ray into the box's own frame, where the box is an unturned AABB
 		var local_from = (from - o.pos).rotated(Vector3.UP, -o.rot)
 		var hit = AABB(-o.size / 2, o.size).intersects_ray(local_from, dir.rotated(Vector3.UP, -o.rot))
 		if hit != null and local_from.distance_to(hit) < best_dist:
@@ -414,14 +423,12 @@ func box_under_mouse(mouse):             # nearest box under the mouse, 0 if non
 			best_dist = local_from.distance_to(hit)
 	return best
 
-
-func mouse_on_plane(mouse, y):           # where the mouse ray crosses the horizontal plane at height y
+#where the mouse ray crosses the horizontal plane at height y
+func mouse_on_plane(mouse, y):           
 	return Plane(Vector3.UP, y).intersects_ray(cam.project_ray_origin(mouse), cam.project_ray_normal(mouse))
 
 
-# the selected box follows the mouse but never into a place where it does not fit:
-# it waits at the last allowed place (sliding along the wall if it can) and jumps
-# across once the mouse reaches a place that is free again
+#drag the object, when hitting and obstacle it moves only when the mouse is free again
 func drag_to(mouse):
 	var o = objects[selected]
 	var here = o.pos
@@ -435,12 +442,10 @@ func drag_to(mouse):
 			return
 
 
-# ---- adding a box: press Add box, then click where it should go ----
-
 func add_box_pressed():
 	get_viewport().gui_release_focus()
 	ghost.mesh.size = Vector3(size_boxes[0].value, size_boxes[1].value, size_boxes[2].value)
-	ghost.rotation.y = ghost_rot         # the last turn is kept, handy for several boxes in a row
+	ghost.rotation.y = ghost_rot        
 	placing = true
 	update_info()
 
@@ -450,8 +455,8 @@ func stop_placing():
 	ghost.visible = false
 	update_info()
 
-
-func placing_position(mouse):            # on the top floor, under the mouse (null if the mouse misses it)
+#on the top floor, under the mouse (TODO: add different floor visisbility and box placement to the currently viewed floor)
+func placing_position(mouse):     
 	var p = mouse_on_plane(mouse, levels[-1])
 	return null if p == null else Vector3(p.x, levels[-1] + ghost.mesh.size.y / 2, p.z)
 
@@ -467,17 +472,11 @@ func move_ghost(mouse):
 func place_box(mouse):
 	var pos = placing_position(mouse)
 	if pos == null or not fits(ghost.mesh.size, pos, ghost_rot):
-		return                           # stays in placing mode: try another spot
+		return                           
 	stop_placing()
 	add_box(ghost.mesh.size, pos, ghost_rot)
 
 
-# ============================== camera ==============================
-# The camera hangs `cam.position.z` metres behind `pivot` and looks at it, so the pivot is
-# the point in the middle of the screen: orbiting turns around it, zooming changes the
-# distance to it. The pivot stays at the top floor's height, where boxes are placed.
-
-# start looking down at the middle of the building
 func place_camera():
 	var area = obstacles[0].rect
 	for o in obstacles:
@@ -492,7 +491,6 @@ func orbit(relative):
 	pivot.rotation_degrees.x = clamp(pivot.rotation_degrees.x - relative.y * ORBIT_SPEED, PITCH_MIN, PITCH_MAX)
 
 
-# zoom toward the point under the mouse: that point stays under the mouse while zooming
 func zoom_at(mouse, factor):
 	var new_dist = clamp(cam.position.z * factor, ZOOM_MIN, ZOOM_MAX)
 	var p = mouse_on_plane(mouse, pivot.position.y)
@@ -501,7 +499,6 @@ func zoom_at(mouse, factor):
 	cam.position.z = new_dist
 
 
-# right-drag: the floor point that was under the mouse stays under the mouse
 func pan(mouse, relative):
 	var before = mouse_on_plane(mouse - relative, pivot.position.y)
 	var after = mouse_on_plane(mouse, pivot.position.y)
@@ -509,7 +506,6 @@ func pan(mouse, relative):
 		pivot.position += before - after
 
 
-# arrows and Q / E: move relative to the way the camera faces, faster when zoomed out
 func move_camera(delta):
 	var dir = Vector3(
 		int(Input.is_action_pressed("ui_right")) - int(Input.is_action_pressed("ui_left")),
@@ -519,14 +515,26 @@ func move_camera(delta):
 		pivot.position += dir.normalized().rotated(Vector3.UP, pivot.rotation.y) * cam.position.z / 4 * delta
 
 
-# ============================== interface ==============================
-
 func make_ui():
 	var ui = CanvasLayer.new()
 	add_child(ui)
 	var rows = VBoxContainer.new()
 	rows.position = Vector2(10, 10)
 	ui.add_child(rows)
+
+	var net_row = HBoxContainer.new()
+	rows.add_child(net_row)
+	address.text = "127.0.0.1"
+	address.custom_minimum_size.x = 160
+	net_row.add_child(address)
+	var join_button = Button.new()
+	join_button.text = "Join"
+	join_button.focus_mode = Control.FOCUS_NONE
+	join_button.pressed.connect(join)
+	net_row.add_child(join_button)
+	status.text = "Not connected"
+	net_row.add_child(status)
+
 	rows.add_child(scale_label)
 
 	var add_row = HBoxContainer.new()
@@ -552,9 +560,7 @@ func make_ui():
 
 	rows.add_child(info)
 
-
-# ============================== input and the frame loop ==============================
-
+#input
 func _unhandled_input(event):
 	if event is InputEventMouse:
 		last_mouse = event.position
@@ -595,7 +601,7 @@ func _unhandled_input(event):
 			if event.shift_pressed:
 				nudge(dir)                   # holding the keys repeats the small step
 			elif not event.echo:
-				change_floor(dir)            # one floor per press, even if the key is held
+				change_floor(dir)            # one floor per press
 		elif event.keycode == KEY_DELETE and objects.has(selected):
 			remove_box(selected)
 		elif event.keycode == KEY_C:
@@ -604,8 +610,6 @@ func _unhandled_input(event):
 			floors.visible = not floors.visible
 
 
-# while placing, a left click places and Esc cancels; returns true if it used the event,
-# so everything else (orbiting, panning, zoom) still works
 func handle_placing(event):
 	if event is InputEventMouseMotion:
 		move_ghost(event.position)
@@ -620,7 +624,7 @@ func handle_placing(event):
 
 
 func _process(delta):
-	if get_viewport().gui_get_focus_owner() != null:     # typing in a field: no keys for the view
+	if get_viewport().gui_get_focus_owner() != null:     # typing in a field
 		return
 	if Input.is_physical_key_pressed(KEY_R):
 		turn(delta)
