@@ -47,8 +47,12 @@ var panning = false
 
 #scene
 var building = Node3D.new()
-var ceilings = Node3D.new()
-var floors = Node3D.new()
+var level_nodes = []
+var ceilings = []
+var floors = []
+var shown_floors = 1
+var ceilings_on = true
+var floors_on = true
 var boxes = Node3D.new()
 var ghost = MeshInstance3D.new()     
 var ghost_mat = StandardMaterial3D.new()
@@ -57,6 +61,7 @@ var ghost_mat = StandardMaterial3D.new()
 var address = LineEdit.new()
 var status = Label.new()
 var scale_label = Label.new()
+var floor_box = SpinBox.new()
 var info = Label.new()
 var size_boxes = []                 
 
@@ -85,6 +90,9 @@ func _ready():
 		scale_label.text = error
 		return
 	build_building()
+	floor_box.max_value = levels.size()
+	floor_box.set_value_no_signal(levels.size())
+	show_floors(levels.size())
 	scale_label.text = scale_text()
 	place_camera()
 	update_info()
@@ -231,17 +239,43 @@ func prism(points, elevation, height): #draws everything
 
 
 func build_building():
-	building.add_child(floors)
-	building.add_child(ceilings)
+	for i in levels.size():
+		var level = Node3D.new()
+		level_nodes.append(level)
+		floors.append(Node3D.new())
+		ceilings.append(Node3D.new())
+		level.add_child(floors[i])
+		level.add_child(ceilings[i])
+		building.add_child(level)
 	for kind in COLORS:
 		var mat = StandardMaterial3D.new()
 		mat.albedo_color = COLORS[kind]
-		var parent = ceilings if kind == "ceilings" else floors if kind == "floors" else building
 		for apt in data.apartments:
 			for piece in apt.get(kind, []):
 				var node = make_piece(piece)
 				node.material_override = mat
+				var i = level_of(piece[1] + piece[2]) if kind == "floors" else level_of(piece[1] + piece[2] / 2)
+				var parent = ceilings[i] if kind == "ceilings" else floors[i] if kind == "floors" else level_nodes[i]
 				parent.add_child(node)
+
+
+func show_floors(value):
+	get_viewport().gui_release_focus()
+	shown_floors = int(value)
+	for i in level_nodes.size():
+		level_nodes[i].visible = i < shown_floors
+	for id in objects:
+		show_box(id)
+	if objects.has(selected) and not objects[selected].node.visible:
+		select(0)
+	if placing:
+		move_ghost(last_mouse)
+	update_info()
+
+
+func show_box(id):
+	var o = objects[id]
+	o.node.visible = level_of(o.pos.y - o.size.y / 2) < shown_floors
 
 
 
@@ -334,6 +368,7 @@ func remove_box(id):
 func move_box(id, pos):
 	objects[id].pos = pos
 	objects[id].node.position = pos
+	show_box(id)
 	update_info()
 
 
@@ -350,7 +385,7 @@ func update_info(message = ""):
 	if message != "":
 		info.text = message
 	elif placing:
-		info.text = "Click where the new box should go on the top floor    Hold R: turn it    Esc: cancel"
+		info.text = "Click where the new box should go on floor %d    Hold R: turn it    Esc: cancel" % shown_floors
 	elif not objects.has(selected):
 		info.text = "Click a box to select it"
 	else:
@@ -366,7 +401,7 @@ func update_info(message = ""):
 func change_floor(dir):
 	var o = objects[selected]
 	var level = level_of(o.pos.y - o.size.y / 2) + dir
-	if level < 0 or level >= levels.size():
+	if level < 0 or level >= shown_floors:
 		return
 	var pos = Vector3(o.pos.x, box_y(o.size, level), o.pos.z)
 	if fits(o.size, pos, o.rot):
@@ -416,6 +451,8 @@ func box_under_mouse(mouse):
 	var best_dist = INF
 	for id in objects:
 		var o = objects[id]
+		if not o.node.visible:
+			continue
 		var local_from = (from - o.pos).rotated(Vector3.UP, -o.rot)
 		var hit = AABB(-o.size / 2, o.size).intersects_ray(local_from, dir.rotated(Vector3.UP, -o.rot))
 		if hit != null and local_from.distance_to(hit) < best_dist:
@@ -444,6 +481,8 @@ func drag_to(mouse):
 
 func add_box_pressed():
 	get_viewport().gui_release_focus()
+	for box in size_boxes:
+		box.apply()
 	ghost.mesh.size = Vector3(size_boxes[0].value, size_boxes[1].value, size_boxes[2].value)
 	ghost.rotation.y = ghost_rot        
 	placing = true
@@ -455,10 +494,11 @@ func stop_placing():
 	ghost.visible = false
 	update_info()
 
-#on the top floor, under the mouse (TODO: add different floor visisbility and box placement to the currently viewed floor)
+#on the highest shown floor, under the mouse
 func placing_position(mouse):     
-	var p = mouse_on_plane(mouse, levels[-1])
-	return null if p == null else Vector3(p.x, levels[-1] + ghost.mesh.size.y / 2, p.z)
+	var top = levels[shown_floors - 1]
+	var p = mouse_on_plane(mouse, top)
+	return null if p == null else Vector3(p.x, top + ghost.mesh.size.y / 2, p.z)
 
 
 func move_ghost(mouse):
@@ -537,6 +577,17 @@ func make_ui():
 
 	rows.add_child(scale_label)
 
+	var floor_row = HBoxContainer.new()
+	rows.add_child(floor_row)
+	var floor_label = Label.new()
+	floor_label.text = "Floors shown"
+	floor_row.add_child(floor_label)
+	floor_box.min_value = 1
+	floor_box.step = 1
+	floor_box.custom_minimum_size.x = 80
+	floor_box.value_changed.connect(show_floors)
+	floor_row.add_child(floor_box)
+
 	var add_row = HBoxContainer.new()
 	rows.add_child(add_row)
 	for axis in ["Width (X)", "Height (Y)", "Depth (Z)"]:
@@ -605,9 +656,13 @@ func _unhandled_input(event):
 		elif event.keycode == KEY_DELETE and objects.has(selected):
 			remove_box(selected)
 		elif event.keycode == KEY_C:
-			ceilings.visible = not ceilings.visible
+			ceilings_on = not ceilings_on
+			for c in ceilings:
+				c.visible = ceilings_on
 		elif event.keycode == KEY_F:
-			floors.visible = not floors.visible
+			floors_on = not floors_on
+			for f in floors:
+				f.visible = floors_on
 
 
 func handle_placing(event):
