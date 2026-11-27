@@ -1,7 +1,10 @@
 extends Node3D
 
-const BUILDING_FILE = "res://draw.json"
+const DATA_FOLDER = "res://server_data/"
+const BUILDING_FILE = DATA_FOLDER + "draw.json"
+const BOXES_FILE = DATA_FOLDER + "boxes.json"
 const PORT = 9080
+var server_address = "127.0.0.1"
 const FINE_STEP = 0.01              
 const TURN_SPEED = 45.0              
 const ORBIT_SPEED = 0.3             
@@ -17,6 +20,7 @@ const COLORS = {
 	"ceilings": Color(0.8, 0.8, 0.75), "doors": Color(0.45, 0.28, 0.12), "windows": Color(0.2, 0.5, 1.0)}
 const BOX_COLOR = Color(0.2, 0.7, 0.3)
 const BOX_SELECTED = Color(1.0, 0.8, 0.1)
+const BOX_LOCKED = Color(0.8, 0.3, 0.3)
 const GHOST_OK = Color(0.2, 0.8, 0.3, 0.35) 
 const GHOST_BAD = Color(0.9, 0.2, 0.2, 0.35) 
 
@@ -33,6 +37,7 @@ var levels = [0.0]
 var objects = {}                     #{size: Vector3, pos: Vector3, rot: float (radians, around Y), node, mat}
 var next_id = 1
 var selected = 0                     
+var locks = {}
 var dragging = false                 
 var grab_offset = Vector3.ZERO
 var placing = false                
@@ -57,8 +62,11 @@ var boxes = Node3D.new()
 var ghost = MeshInstance3D.new()     
 var ghost_mat = StandardMaterial3D.new()
 
+#server
+var building_bytes = PackedByteArray()
+var building_size = 0
+
 #interface
-var address = LineEdit.new()
 var status = Label.new()
 var scale_label = Label.new()
 var floor_box = SpinBox.new()
@@ -81,35 +89,68 @@ func _ready():
 	add_child(pivot)
 	pivot.add_child(cam)
 	make_ui()
-	multiplayer.connected_to_server.connect(func(): status.text = "Connected as player %d" % multiplayer.get_unique_id())
+	multiplayer.connected_to_server.connect(func(): status.text = "Connected as player %d, loading the building ..." % me())
 	multiplayer.connection_failed.connect(func(): status.text = "Could not reach the server")
-	multiplayer.server_disconnected.connect(func(): status.text = "Server disconnected")
-
-	var error = load_building(BUILDING_FILE)
-	if error != "":
-		scale_label.text = error
-		return
-	build_building()
-	floor_box.max_value = levels.size()
-	floor_box.set_value_no_signal(levels.size())
-	show_floors(levels.size())
-	scale_label.text = scale_text()
-	place_camera()
+	multiplayer.server_disconnected.connect(disconnected)
+	scale_label.text = "Press Join to load the building"
 	update_info()
 
 
 func start_server():
 	set_process(false)
 	Engine.max_fps = 60
+	var text = FileAccess.get_file_as_string(BUILDING_FILE)
+	if text == "":
+		print("Cannot open %s" % BUILDING_FILE)
+		get_tree().quit(1)
+		return
+	building_bytes = text.to_utf8_buffer()
+	building_size = building_bytes.size()
+	building_bytes = building_bytes.compress(FileAccess.COMPRESSION_ZSTD)
+	load_boxes()
 	var peer = ENetMultiplayerPeer.new()
 	if peer.create_server(PORT) != OK:
 		print("Could not listen on port %d" % PORT)
 		get_tree().quit(1)
 		return
 	multiplayer.multiplayer_peer = peer
-	multiplayer.peer_connected.connect(func(id): print("Player %d joined, %d connected" % [id, multiplayer.get_peers().size()]))
-	multiplayer.peer_disconnected.connect(func(id): print("Player %d left, %d connected" % [id, multiplayer.get_peers().size()]))
+	multiplayer.peer_connected.connect(player_joined)
+	multiplayer.peer_disconnected.connect(player_left)
 	print("Server listening on port %d" % PORT)
+
+
+func player_joined(id):
+	print("Player %d joined, %d connected" % [id, multiplayer.get_peers().size()])
+	load_project.rpc_id(id, building_bytes, building_size)
+	for box in objects:
+		var o = objects[box]
+		add_object.rpc_id(id, box, o.size, o.pos, o.rot, locks.get(box, 0))
+
+
+func player_left(id):
+	print("Player %d left, %d connected" % [id, multiplayer.get_peers().size()])
+	for box in locks.keys():
+		if locks[box] == id:
+			set_lock.rpc(box, 0, objects[box].pos, objects[box].rot)
+	save_boxes()
+
+
+func load_boxes():
+	if not FileAccess.file_exists(BOXES_FILE):
+		return
+	for b in JSON.parse_string(FileAccess.get_file_as_string(BOXES_FILE)):
+		add_box(int(b.id), Vector3(b.size[0], b.size[1], b.size[2]), Vector3(b.pos[0], b.pos[1], b.pos[2]), b.rot)
+		next_id = max(next_id, int(b.id) + 1)
+	print("Loaded %d boxes" % objects.size())
+
+
+func save_boxes():
+	var list = []
+	for id in objects:
+		var o = objects[id]
+		list.append({"id": id, "size": [o.size.x, o.size.y, o.size.z], "pos": [o.pos.x, o.pos.y, o.pos.z], "rot": o.rot})
+	DirAccess.make_dir_recursive_absolute(DATA_FOLDER)
+	FileAccess.open(BOXES_FILE, FileAccess.WRITE).store_string(JSON.stringify(list, "\t"))
 
 
 func join():
@@ -119,11 +160,133 @@ func join():
 			status.text = "Already connected as player %d" % multiplayer.get_unique_id()
 		return
 	var peer = ENetMultiplayerPeer.new()
-	if peer.create_client(address.text.strip_edges(), PORT) != OK:
+	if peer.create_client(server_address, PORT) != OK:
 		status.text = "Bad address"
 		return
 	multiplayer.multiplayer_peer = peer
 	status.text = "Connecting ..."
+
+
+func disconnected():
+	status.text = "Server disconnected"
+	unload()
+
+
+func unload():
+	stop_placing()
+	for id in objects.keys():
+		remove_box(id)
+	locks.clear()
+	for child in building.get_children():
+		child.queue_free()
+	level_nodes.clear()
+	ceilings.clear()
+	floors.clear()
+	obstacles.clear()
+	levels = [0.0]
+	data = {}
+	scale_label.text = "Press Join to load the building"
+
+
+@rpc("authority", "call_remote", "reliable")
+func load_project(bytes, size):
+	unload()
+	var error = load_building(bytes.decompress(size, FileAccess.COMPRESSION_ZSTD).get_string_from_utf8())
+	if error != "":
+		scale_label.text = error
+		return
+	build_building()
+	floor_box.max_value = levels.size()
+	floor_box.set_value_no_signal(levels.size())
+	show_floors(levels.size())
+	scale_label.text = scale_text()
+	place_camera()
+	status.text = "Connected as player %d" % me()
+
+
+func me():
+	return multiplayer.get_unique_id()
+
+
+func held_by_other(id):
+	return locks.get(id, 0) not in [0, me()]
+
+
+func send(id):
+	request_move.rpc_id(1, id, objects[id].pos, objects[id].rot)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_add(size, pos, rot):
+	add_object.rpc(next_id, size, pos, rot, multiplayer.get_remote_sender_id())
+	next_id += 1
+	save_boxes()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_lock(id):
+	if objects.has(id):
+		var holder = locks.get(id, 0)
+		set_lock.rpc(id, multiplayer.get_remote_sender_id() if holder == 0 else holder, objects[id].pos, objects[id].rot)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func release(id):
+	if objects.has(id) and locks.get(id, 0) == multiplayer.get_remote_sender_id():
+		set_lock.rpc(id, 0, objects[id].pos, objects[id].rot)
+		save_boxes()
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_move(id, pos, rot):
+	if locks.get(id, 0) == multiplayer.get_remote_sender_id():
+		set_box.rpc(id, pos, rot)
+
+
+@rpc("any_peer", "call_local", "reliable")
+func request_remove(id):
+	if locks.get(id, 0) == multiplayer.get_remote_sender_id():
+		remove_object.rpc(id)
+		save_boxes()
+
+
+@rpc("authority", "call_local", "reliable")
+func add_object(id, size, pos, rot, holder):
+	add_box(id, size, pos, rot)
+	if holder != 0:
+		locks[id] = holder
+	color_box(id)
+	if holder == me():
+		select(id)
+
+
+@rpc("authority", "call_local", "reliable")
+func set_lock(id, holder, pos, rot):
+	if not objects.has(id):
+		return
+	if holder == 0:
+		locks.erase(id)
+	else:
+		locks[id] = holder
+	if holder != me():
+		place(id, pos, rot)
+	if held_by_other(id) and selected == id:
+		selected = 0
+		dragging = false
+		update_info("Box %d is already taken by player %d" % [id, holder])
+	color_box(id)
+
+
+@rpc("authority", "call_local", "reliable")
+func set_box(id, pos, rot):
+	if objects.has(id) and locks.get(id, 0) != me():
+		place(id, pos, rot)
+
+
+@rpc("authority", "call_local", "reliable")
+func remove_object(id):
+	if objects.has(id):
+		remove_box(id)
 
 
 func add_lights():
@@ -146,11 +309,10 @@ func add_lights():
 
 
 
-func load_building(path):                # will return an error if something went wrong
-	var f = FileAccess.open(path, FileAccess.READ)
-	if f == null:
-		return "Cannot open %s" % path
-	var parsed = JSON.parse_string(f.get_as_text())
+func load_building(text):                # will return an error if something went wrong
+	var parsed = JSON.parse_string(text)
+	if parsed == null:
+		return "The server sent a broken building file"
 	data = parsed
 	for apt in data.apartments:
 		for kind in BLOCKING:
@@ -345,7 +507,7 @@ func fits(size, pos, rot):
 
 
 
-func add_box(size, pos, rot):
+func add_box(id, size, pos, rot):
 	var node = MeshInstance3D.new()
 	node.mesh = BoxMesh.new()
 	node.mesh.size = size
@@ -354,31 +516,52 @@ func add_box(size, pos, rot):
 	node.position = pos
 	node.rotation.y = rot
 	boxes.add_child(node)
-	objects[next_id] = {"size": size, "pos": pos, "rot": rot, "node": node, "mat": mat}
-	select(next_id)
-	next_id += 1
+	objects[id] = {"size": size, "pos": pos, "rot": rot, "node": node, "mat": mat}
+	show_box(id)
 
 
 func remove_box(id):
 	objects[id].node.queue_free()
 	objects.erase(id)
-	select(0)
+	locks.erase(id)
+	if selected == id:
+		selected = 0
+	update_info()
 
 
 func move_box(id, pos):
 	objects[id].pos = pos
 	objects[id].node.position = pos
 	show_box(id)
+	send(id)
+	update_info()
+
+
+func place(id, pos, rot):
+	objects[id].pos = pos
+	objects[id].rot = rot
+	objects[id].node.position = pos
+	objects[id].node.rotation.y = rot
+	show_box(id)
 	update_info()
 
 
 func select(id):
-	if objects.has(selected):
-		objects[selected].mat.albedo_color = BOX_COLOR
+	if id == selected:
+		return
+	var old = selected
 	selected = id
+	if objects.has(old):
+		release.rpc_id(1, old)
+		color_box(old)
 	if objects.has(id):
-		objects[id].mat.albedo_color = BOX_SELECTED
+		request_lock.rpc_id(1, id)
+		color_box(id)
 	update_info()
+
+
+func color_box(id):
+	objects[id].mat.albedo_color = BOX_SELECTED if id == selected else BOX_LOCKED if held_by_other(id) else BOX_COLOR
 
 
 func update_info(message = ""):
@@ -437,6 +620,7 @@ func turn(delta):
 		if fits(o.size, o.pos, o.rot + step):
 			o.rot += step
 			o.node.rotation.y = o.rot
+			send(selected)
 			update_info()
 		else:
 			update_info("Box %d cannot turn further here: it would hit something" % selected)
@@ -481,6 +665,9 @@ func drag_to(mouse):
 
 func add_box_pressed():
 	get_viewport().gui_release_focus()
+	if data.is_empty():
+		update_info("Join a server first")
+		return
 	for box in size_boxes:
 		box.apply()
 	ghost.mesh.size = Vector3(size_boxes[0].value, size_boxes[1].value, size_boxes[2].value)
@@ -514,7 +701,7 @@ func place_box(mouse):
 	if pos == null or not fits(ghost.mesh.size, pos, ghost_rot):
 		return                           
 	stop_placing()
-	add_box(ghost.mesh.size, pos, ghost_rot)
+	request_add.rpc_id(1, ghost.mesh.size, pos, ghost_rot)
 
 
 func place_camera():
@@ -564,9 +751,6 @@ func make_ui():
 
 	var net_row = HBoxContainer.new()
 	rows.add_child(net_row)
-	address.text = "127.0.0.1"
-	address.custom_minimum_size.x = 160
-	net_row.add_child(address)
 	var join_button = Button.new()
 	join_button.text = "Join"
 	join_button.focus_mode = Control.FOCUS_NONE
@@ -622,7 +806,9 @@ func _unhandled_input(event):
 			MOUSE_BUTTON_LEFT:
 				get_viewport().gui_release_focus()
 				var id = box_under_mouse(event.position) if event.pressed else 0
-				if id != 0:
+				if id != 0 and held_by_other(id):
+					update_info("Box %d is being moved by player %d" % [id, locks[id]])
+				elif id != 0:
 					select(id)
 					var p = mouse_on_plane(event.position, objects[id].pos.y)
 					grab_offset = objects[id].pos - p if p != null else Vector3.ZERO
@@ -654,7 +840,7 @@ func _unhandled_input(event):
 			elif not event.echo:
 				change_floor(dir)            # one floor per press
 		elif event.keycode == KEY_DELETE and objects.has(selected):
-			remove_box(selected)
+			request_remove.rpc_id(1, selected)
 		elif event.keycode == KEY_C:
 			ceilings_on = not ceilings_on
 			for c in ceilings:

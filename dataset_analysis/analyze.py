@@ -172,7 +172,7 @@ if __name__ == "__main__":
             rows = rows_b[rows_b.apartment_id == apt["id"]]
             b["apartments"].append(build_apartment(apt["id"], rows, openings, stairs_by_floor, floor_below))
 
-        with open("../godot_sim_updated/godot-sim-4/draw.json", "w") as f:
+        with open("../godot_sim_updated/godot-sim-4/server_data/draw.json", "w") as f:
             json.dump(b, f)
         print(f"building {i + 1}/{len(building_ids)} (id {building_id}): {len(apartments)} apartments written")
 
