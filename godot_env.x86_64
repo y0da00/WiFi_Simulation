@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+exec /usr/bin/godot --path "$(cd "$(dirname "$0")" && pwd)/godot_sim_updated/godot-sim-4" res://rl/rl_building.tscn "$@"

@@ -2,3 +2,8 @@
 .import/
 .mono/
 Swiss_Buildings_Data/
+.venv/
+__pycache__/
+.grokbot_tmp/
+.vscode/
+ml/runs/

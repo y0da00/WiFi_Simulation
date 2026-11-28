@@ -1,0 +1,84 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://rl/rl_building.gd" id="1_world"]
+[ext_resource type="Script" path="res://rl/rl_agent.gd" id="2_agent"]
+[ext_resource type="Script" path="res://rl/rl_controller.gd" id="3_ctrl"]
+[ext_resource type="PackedScene" path="res://addons/godot_rl_agents/sensors/sensors_3d/RaycastSensor3D.tscn" id="4_rays"]
+[ext_resource type="Script" path="res://addons/godot_rl_agents/sync.gd" id="5_sync"]
+[ext_resource type="Script" path="res://rl/rl_camera.gd" id="6_cam"]
+
+[sub_resource type="StandardMaterial3D" id="Mat_agent"]
+albedo_color = Color(0.17910999, 0.46759075, 0.07103754, 1)
+
+[sub_resource type="CapsuleMesh" id="Mesh_agent"]
+material = SubResource("Mat_agent")
+radius = 0.25
+height = 1.6
+
+[sub_resource type="CapsuleShape3D" id="Shape_agent"]
+radius = 0.25
+height = 1.6
+
+[sub_resource type="StandardMaterial3D" id="Mat_goal"]
+albedo_color = Color(1, 0.85, 0.1, 1)
+emission_enabled = true
+emission = Color(1, 0.8, 0.1, 1)
+
+[sub_resource type="CylinderMesh" id="Mesh_goal"]
+material = SubResource("Mat_goal")
+top_radius = 0.4
+bottom_radius = 0.4
+height = 0.2
+
+[sub_resource type="Environment" id="Env"]
+ambient_light_source = 2
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 0.5
+
+[node name="RLBuilding" type="Node3D"]
+script = ExtResource("1_world")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Env")
+
+[node name="Sun" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.8660254, -0.38302222, 0.32139382, 0, 0.64278764, 0.76604444, -0.5, -0.66341394, 0.5566704, 0, 10, 0)
+
+[node name="Agent" type="CharacterBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
+collision_mask = 1
+script = ExtResource("2_agent")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Agent"]
+mesh = SubResource("Mesh_agent")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Agent"]
+shape = SubResource("Shape_agent")
+
+[node name="AIController3D" type="Node3D" parent="Agent"]
+script = ExtResource("3_ctrl")
+
+[node name="RayCastSensor3D" parent="Agent/AIController3D" instance=ExtResource("4_rays")]
+
+[node name="Goal" type="Node3D" parent="."]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Goal"]
+mesh = SubResource("Mesh_goal")
+
+[node name="CameraPivot" type="Node3D" parent="."]
+script = ExtResource("6_cam")
+
+[node name="Camera3D" type="Camera3D" parent="CameraPivot"]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 12)
+current = true
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Label" type="Label" parent="HUD"]
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 400.0
+offset_bottom = 40.0
+
+[node name="Sync" type="Node" parent="."]
+script = ExtResource("5_sync")

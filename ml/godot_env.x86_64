@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Starts ONE training copy of the Godot simulation (the scene ml/train_env.tscn).
+# Godot RL Agents (train.py) runs this file like an exported game: it wants a path that
+# ends in .x86_64, and adds options such as --port=11008 --env_seed=0 --headless
+# --speedup=40 --action_repeat=6 --agents=16, which are passed on to Godot unchanged.
+PROJECT="$(cd "$(dirname "$0")/.." && pwd)/godot_sim_updated/godot-sim-4"
+exec godot --path "$PROJECT" res://ml/train_env.tscn "$@"

@@ -1,0 +1,53 @@
+<scene version="2.1.0">
+    <bsdf type="itu-radio-material" id="mat-concrete">
+        <string name="type" value="concrete"/>
+        <float name="thickness" value="0.2"/>
+    </bsdf>
+    <bsdf type="itu-radio-material" id="mat-wood">
+        <string name="type" value="wood"/>
+        <float name="thickness" value="0.04"/>
+    </bsdf>
+    <bsdf type="itu-radio-material" id="mat-glass">
+        <string name="type" value="glass"/>
+        <float name="thickness" value="0.01"/>
+    </bsdf>
+    <bsdf type="itu-radio-material" id="mat-metal">
+        <string name="type" value="metal"/>
+        <float name="thickness" value="0.01"/>
+    </bsdf>
+    <shape type="ply" id="mesh-walls">
+        <string name="filename" value="meshes/walls.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="mat-concrete" name="bsdf"/>
+    </shape>
+    <shape type="ply" id="mesh-floor">
+        <string name="filename" value="meshes/floor.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="mat-concrete" name="bsdf"/>
+    </shape>
+    <shape type="ply" id="mesh-ceiling">
+        <string name="filename" value="meshes/ceiling.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="mat-concrete" name="bsdf"/>
+    </shape>
+    <shape type="ply" id="mesh-stairs">
+        <string name="filename" value="meshes/stairs.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="mat-concrete" name="bsdf"/>
+    </shape>
+    <shape type="ply" id="mesh-doors">
+        <string name="filename" value="meshes/doors.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="mat-wood" name="bsdf"/>
+    </shape>
+    <shape type="ply" id="mesh-windows">
+        <string name="filename" value="meshes/windows.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="mat-glass" name="bsdf"/>
+    </shape>
+    <shape type="ply" id="mesh-railings">
+        <string name="filename" value="meshes/railings.ply"/>
+        <boolean name="face_normals" value="true"/>
+        <ref id="mat-metal" name="bsdf"/>
+    </shape>
+</scene>
